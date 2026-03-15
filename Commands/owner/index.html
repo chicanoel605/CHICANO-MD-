@@ -1,0 +1,60 @@
+import { reply, react, isOwner } from '../../lib/utils.js';
+import { config } from '../../config/config.js';
+
+export const ownerCommands = {
+
+  // ─── .owner ──────────────────────────────────────────────
+  owner: async (sock, msg) => {
+    await reply(sock, msg,
+      `👑 *PROPRIÉTAIRE DU BOT*\n\n` +
+      `📛 Nom    : ${config.ownerName}\n` +
+      `📱 Numéro : wa.me/${config.ownerNumber}\n` +
+      `🤖 Bot    : ${config.botName}\n` +
+      `🧬 Version: ${config.version}\n\n` +
+      `_Pour contacter le propriétaire, envoie un message !_`
+    );
+  },
+
+  // ─── .fullpp (Voir photo de profil en grand) ─────────────
+  fullpp: async (sock, msg, args) => {
+    if (!isOwner(msg.key.participant || msg.key.remoteJid))
+      return reply(sock, msg, '❌ Réservé au propriétaire.');
+    try {
+      const jid = args.length
+        ? args[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net'
+        : msg.key.participant || msg.key.remoteJid;
+      const ppUrl = await sock.profilePictureUrl(jid, 'image');
+      await sock.sendMessage(msg.key.remoteJid, {
+        image: { url: ppUrl },
+        caption: `🖼️ *Photo de profil*\n@${jid.split('@')[0]}`,
+        mentions: [jid],
+      }, { quoted: msg });
+    } catch (e) {
+      await reply(sock, msg, '❌ Pas de photo de profil ou profil privé.');
+    }
+  },
+
+  // ─── .getpp (Obtenir photo de profil de quelqu'un) ───────
+  getpp: async (sock, msg, args) => {
+    try {
+      let jid;
+      const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid;
+      if (mentioned?.length) {
+        jid = mentioned[0];
+      } else if (args.length) {
+        jid = args[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+      } else {
+        return reply(sock, msg, `❌ Usage : *.getpp* @membre ou *.getpp* numéro`);
+      }
+
+      const ppUrl = await sock.profilePictureUrl(jid, 'image');
+      await sock.sendMessage(msg.key.remoteJid, {
+        image: { url: ppUrl },
+        caption: `🖼️ *Photo de profil de* @${jid.split('@')[0]}`,
+        mentions: [jid],
+      }, { quoted: msg });
+    } catch (e) {
+      await reply(sock, msg, '❌ Pas de photo de profil ou profil privé.');
+    }
+  },
+};
