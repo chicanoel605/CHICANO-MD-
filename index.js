@@ -12,17 +12,28 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import { config } from './config/config.js';
 import { messageHandler } from './lib/handler.js';
+import readline from 'readline';
 
 // ─── Banner ──────────────────────────────────────────────
 console.log(chalk.cyan(figlet.textSync('CHICANO MD', { font: 'Big' })));
 console.log(chalk.yellow(`  Version: ${config.version} | Owner: ${config.ownerName}\n`));
 
-// ─── Store (cache en mémoire) ─────────────────────────────
-const store = makeInMemoryStore({
-  logger: pino({ level: 'silent' }),
-});
+// ─── Demander le numéro dans le terminal ─────────────────
+function question(prompt) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise(resolve => {
+    rl.question(prompt, answer => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
 
-// ─── Connexion principale ─────────────────────────────────
+const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
+
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(`./${config.sessionId}`);
   const { version } = await fetchLatestBaileysVersion();
@@ -30,75 +41,77 @@ async function connectToWhatsApp() {
   const sock = makeWASocket({
     version,
     logger: pino({ level: 'silent' }),
-    printQRInTerminal: true,
+    printQRInTerminal: false, // ← Désactive le QR
     browser: Browsers.ubuntu('Chrome'),
     auth: state,
     getMessage: async (key) => {
-      if (store) {
-        const msg = await store.loadMessage(key.remoteJid, key.id);
-        return msg?.message || undefined;
-      }
-      return undefined;
+      const msg = await store.loadMessage(key.remoteJid, key.id);
+      return msg?.message || undefined;
     },
   });
 
   store.bind(sock.ev);
 
-  // ─── Gestion connexion ─────────────────────────────────
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
-      console.log(chalk.yellow('\n[QR] Scanne le QR code avec WhatsApp !\n'));
+  // ─── Pair Code ────────────────────────────────────────
+  if (!sock.authState.creds.registered) {
+    // Demande le numéro si pas encore connecté
+    let phoneNumber = config.ownerNumber;
+
+    if (!phoneNumber || phoneNumber === '2250000000000') {
+      phoneNumber = await question(chalk.yellow('📱 Entre ton numéro WhatsApp (ex: 2250100000000) : '));
     }
 
+    phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(phoneNumber);
+        const formatted = code.match(/.{1,4}/g)?.join('-') || code;
+        console.log(chalk.green('\n┌─────────────────────────┐'));
+        console.log(chalk.green(`│  CODE : ${chalk.bold.white(formatted)}       │`));
+        console.log(chalk.green('└─────────────────────────┘'));
+        console.log(chalk.yellow('👆 Entre ce code dans WhatsApp > Appareils liés > Lier avec numéro\n'));
+      } catch (e) {
+        console.error(chalk.red('[PAIR ERROR]'), e.message);
+      }
+    }, 3000);
+  }
+
+  // ─── Gestion connexion ────────────────────────────────
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output.statusCode
         : undefined;
-
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      console.log(chalk.red(`\n[DISCONNECT] Déconnecté. Code: ${statusCode}`));
-
+      console.log(chalk.red(`\n[DISCONNECT] Code: ${statusCode}`));
       if (shouldReconnect) {
-        console.log(chalk.yellow('[RECONNECT] Reconnexion en cours...'));
+        console.log(chalk.yellow('[RECONNECT] Reconnexion dans 3s...'));
         setTimeout(connectToWhatsApp, 3000);
       } else {
-        console.log(chalk.red('[LOGOUT] Session expirée. Supprime le dossier session et relance.'));
+        console.log(chalk.red('[LOGOUT] Supprime le dossier session et relance.'));
       }
     }
 
     if (connection === 'open') {
-      console.log(chalk.green(`\n[✅ CONNECTED] ${config.botName} est maintenant en ligne !`));
+      console.log(chalk.green(`\n[✅ CONNECTÉ] ${config.botName} est en ligne !`));
       console.log(chalk.green(`[BOT] Numéro : ${sock.user?.id}`));
-      console.log(chalk.cyan(`[BOT] Préfixe : ${config.prefix}`));
-      console.log(chalk.cyan(`[BOT] Owner  : ${config.ownerName} (${config.ownerNumber})\n`));
+      console.log(chalk.cyan(`[BOT] Préfixe : ${config.prefix}\n`));
     }
   });
 
-  // ─── Sauvegarde credentials ────────────────────────────
   sock.ev.on('creds.update', saveCreds);
 
-  // ─── Auto read ─────────────────────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
-
     for (const msg of messages) {
       if (!msg.message) continue;
-
-      // Auto read
-      if (config.autoRead) {
-        await sock.readMessages([msg.key]);
-      }
-
-      // Handle commandes
+      if (config.autoRead) await sock.readMessages([msg.key]);
       await messageHandler(sock, msg);
     }
   });
-
-  return sock;
 }
 
-// ─── Démarrage ───────────────────────────────────────────
 connectToWhatsApp().catch(err => {
   console.error(chalk.red('[FATAL ERROR]'), err);
   process.exit(1);
