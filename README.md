@@ -1,4 +1,4 @@
- #🤖 CHICANO MD V2
+ 🤖 CHICANO MD V2
 
 <div align="center">
   <img src="https://img.shields.io/badge/Version-2.1.0-blue?style=for-the-badge" />
